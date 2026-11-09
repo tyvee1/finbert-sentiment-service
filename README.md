@@ -153,7 +153,7 @@ python monitoring/stream.py
 docker compose down -v
 ```
 
-Two things worth knowing, because both are silent when wrong:
+Three things worth knowing, because all three are silent when wrong:
 
 `prometheus.yml` scrapes `api:8000`. That is the **Compose service name**,
 resolvable only by a container on the same Compose network — which is why
@@ -166,6 +166,20 @@ through the UI. Anything created in the browser lives in Grafana's own
 database, which `docker compose down -v` deletes — so a dashboard imported by
 hand has to be re-imported after every teardown, and is not really part of
 this repository.
+
+**The container loads the model from the Hub, not from the registry**, because
+`docker-compose.yml` overrides `MODEL_SOURCE` to `huggingface`. `.env` ships
+`mlflow`, which is correct for `python app/main.py` on the host and wrong
+inside a container: the registry lookup needs the tracking server, and
+`mlflow server --port 5000` binds `127.0.0.1`, while the container arrives via
+the host gateway. The container is refused, `lifespan` catches the failure,
+uvicorn starts regardless, and `/health` answers 503 for as long as you leave
+it — logging `Connection refused` for an address that looks right. Reaching
+the registry from a container means `mlflow server --host 0.0.0.0`, which
+publishes the model registry on the local network; that is not a thing a
+reviewer should have to do to watch the stack run, and `huggingface` is what CI
+and the Fargate task use anyway. The registry path is exercised by the
+host-side run above, and by `scripts/promote.py`.
 
 `dvc repro` must be run **in full**, not stage by stage. `dvc.lock` is a
 deliverable, and a lock produced by `dvc repro clean` alone contains one stage.

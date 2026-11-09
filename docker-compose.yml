@@ -31,6 +31,28 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      # These two override .env, because `environment:` takes precedence over
+      # `env_file:` and .env is written for the HOST-side run.
+      #
+      # MODEL_SOURCE. .env ships `mlflow`, which is right for
+      # `python app/main.py` on the host and wrong in here. The registry
+      # lookup needs the tracking server, the server is started by the README
+      # as `mlflow server --port 5000`, and that binds 127.0.0.1 — the
+      # container arrives via the host gateway, not loopback, so it is refused.
+      # The failure is quiet in the worst way: lifespan catches it, uvicorn
+      # starts anyway, and /health answers 503 indefinitely while the
+      # container logs "Connection refused" for an address that looks correct.
+      # `huggingface` is also what CI and the Fargate task use, so the
+      # container here loads the model the same way the deployed one does.
+      MODEL_SOURCE: huggingface
+      # Correct for a container even though it is unused above, so that
+      # flipping MODEL_SOURCE back to `mlflow` fails for one reason instead of
+      # two. It still needs the tracking server bound to all interfaces
+      # (`mlflow server --host 0.0.0.0 --port 5000`), which is why that is not
+      # the default: it puts the model registry on the local network, and a
+      # reviewer should not have to do that to see the stack run.
+      MLFLOW_TRACKING_URI: http://host.docker.internal:5000
     volumes:
       # The MLflow tracking server runs on the HOST and writes run metadata to
       # ./mlruns and model artifacts to ./mlartifacts. Mounting both read-only
@@ -39,6 +61,12 @@ services:
       # it loads from can promote itself.
       - ./mlruns:/app/mlruns:ro
       - ./mlartifacts:/app/mlartifacts:ro
+      # The Hub cache, as a named volume rather than a host mount: the
+      # container runs as uid 10001 and would not be able to write into a
+      # developer-owned ~/.cache/huggingface. Without this the model is
+      # downloaded again on every `up`, which is the difference between a
+      # healthcheck that passes in seconds and one racing a 400 MB download.
+      - hf-cache:/home/appuser/.cache/huggingface
     extra_hosts:
       # Linux does not resolve host.docker.internal on its own; host-gateway is
       # the documented alias for the host from inside the container. On macOS
@@ -59,7 +87,12 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 180s
+      # 300s, not 180s. On a cold hf-cache volume the container downloads the
+      # model before it can serve anything, and a probe that starts counting
+      # failures mid-download kills the container for being slow rather than
+      # broken. Failures during start_period do not count toward `retries`,
+      # so this only costs time on a run that was going to fail anyway.
+      start_period: 300s
     restart: unless-stopped
 
   prometheus:
@@ -112,3 +145,10 @@ services:
       prometheus:
         condition: service_started
     restart: unless-stopped
+
+volumes:
+  # The Hugging Face cache for the api service. Declared as a named volume so
+  # Docker owns it and the container's unprivileged user can write to it.
+  # `docker compose down -v` removes it, which is correct for a clean teardown
+  # and means the next `up` re-downloads the model.
+  hf-cache:
