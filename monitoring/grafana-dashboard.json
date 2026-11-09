@@ -1,0 +1,200 @@
+{
+  "__comment": "Grafana dashboard for the FinBERT sentiment API, backed by the Prometheus instance defined in docker-compose.yml. Import with Dashboards > New > Import > Upload JSON file, then pick the Prometheus data source. Panel 3 reads latency PERCENTILES out of a cumulative histogram with histogram_quantile(), which is the only correct way to read one: the buckets are cumulative, so the largest bucket always equals the total count and the distribution lives in the differences between buckets, never in the top one. A panel that graphed prediction_latency_ms_bucket directly would plot a monotonically rising line and look like latency climbing forever.",
+  "title": "FinBERT Sentiment API",
+  "uid": "finbert-api",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "timezone": "browser",
+  "tags": ["finbert", "mlops", "inference"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "label": "Data source",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request rate (predictions/sec)",
+      "description": "Rate of PREDICTIONS, not of HTTP requests: the counter is incremented once per prediction, so a batch of 10 moves it by 10. That is the number that matters for capacity, because inference cost scales with predictions and not with request count. The 5m window is five times the 15s scrape interval, which is the smallest window that is not dominated by scrape jitter.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(prediction_requests_total[5m]))",
+          "legendFormat": "all predictions"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(prediction_errors_total[5m]))",
+          "legendFormat": "errors"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Latency percentiles (ms)",
+      "description": "p50, p95 and p99 derived from the cumulative histogram with histogram_quantile. Resolution is limited by the bucket boundaries: with a bucket edge at 100ms and the next at 250ms, a p95 inside that range is interpolated, not measured. Watch p99 against p50 rather than either alone — the two separating is queueing, which means the service needs more workers, not a faster model.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 0 }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.50, sum(rate(prediction_latency_ms_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.95, sum(rate(prediction_latency_ms_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.99, sum(rate(prediction_latency_ms_bucket[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Sentiment distribution over time (% of predictions)",
+      "description": "The share of predictions in each class, as a percentage of all predictions in the window. This is the panel that detects a model changing behaviour while every individual response still looks confident and well formed: a drift from 30% positive to 80% positive over a shift is visible here and invisible to any per-request check. Stacked to 100 so the shape of the mix is readable rather than the absolute volume, which panel 1 already shows.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "stacking": { "mode": "percent" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(prediction_requests_total[5m])) by (sentiment) / ignoring(sentiment) group_left sum(rate(prediction_requests_total[5m]))",
+          "legendFormat": "{{sentiment}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Error ratio (5m)",
+      "description": "Errors as a share of prediction attempts. `or vector(0)` is deliberate: before the first error the errors counter has no series at all, and without the fallback this panel reads 'No data' — which is indistinguishable from the exporter being down. An absent series and a zero are different facts, and a health panel must not conflate them.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.01 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "(sum(rate(prediction_errors_total[5m])) or vector(0)) / clamp_min(sum(rate(prediction_requests_total[5m])), 1)",
+          "legendFormat": "error ratio"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Scrape target up",
+      "description": "Whether Prometheus can reach the API at all. A dead-man switch: every other panel on this dashboard goes quiet both when traffic stops and when the exporter stops, and those need telling apart. `up` is 0 when the target is down and absent when the job itself is gone, so the absence of this panel's data is a finding in its own right.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 17 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "DOWN", "color": "red", "index": 0 },
+                "1": { "text": "UP", "color": "green", "index": 1 }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "up{job=\"finbert-api\"}",
+          "legendFormat": "finbert-api"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Predictions in the last hour",
+      "description": "Volume context for the panels above. A 2% error ratio over 40 predictions and over 40,000 are different situations, and a rate panel alone does not say which one you are looking at.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 17 },
+      "fieldConfig": {
+        "defaults": { "unit": "short" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(increase(prediction_requests_total[1h]))",
+          "legendFormat": "predictions"
+        }
+      ]
+    }
+  ]
+}

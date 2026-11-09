@@ -61,6 +61,9 @@ EXIT_REFUSED = 1
 EXIT_COULD_NOT_DECIDE = 2
 
 PRODUCTION_ALIAS = "production"
+# Set on a version at promotion time so that promotion history survives the
+# alias being moved. scripts/rollback_model.py reads it.
+PROMOTED_TAG = "was_promoted"
 
 
 def load_params() -> dict:
@@ -149,7 +152,7 @@ def get_latest_version(client: MlflowClient, model_name: str):
     return max(versions, key=lambda v: int(v.version))
 
 
-def promote(client: MlflowClient, model_name: str, expected_run_id: str):
+def promote(client: MlflowClient, model_name: str, expected_run_id: str, f1: float):
     """Assign the ``production`` alias to the latest version of the model.
 
     Args:
@@ -157,6 +160,7 @@ def promote(client: MlflowClient, model_name: str, expected_run_id: str):
         model_name: Registered model name.
         expected_run_id: The run whose score authorised this promotion. The
             latest version's own ``run_id`` must match it.
+        f1: The score that authorised it, recorded on the version as a tag.
 
     Returns:
         The promoted ``ModelVersion``.
@@ -182,6 +186,17 @@ def promote(client: MlflowClient, model_name: str, expected_run_id: str):
         )
 
     client.set_registered_model_alias(model_name, PRODUCTION_ALIAS, version.version)
+
+    # Record the promotion on the version itself. An alias records only where
+    # it points NOW, and MLflow keeps no history of where it pointed before,
+    # so without this tag there is no way to tell a version that was once
+    # approved from one that was registered and rejected. That distinction is
+    # the whole basis of a safe rollback: scripts/rollback_model.py reads this
+    # tag rather than assuming the previous version number was ever fit to
+    # serve.
+    client.set_model_version_tag(
+        model_name, version.version, PROMOTED_TAG, f"f1_weighted={f1:.6f}"
+    )
     return version
 
 
@@ -248,7 +263,7 @@ def main() -> int:
         return EXIT_OK
 
     try:
-        version = promote(client, model_name, expected_run_id=run_id)
+        version = promote(client, model_name, expected_run_id=run_id, f1=f1)
     except RuntimeError as exc:
         print(f"\n[REFUSED] {exc}", file=sys.stderr)
         return EXIT_REFUSED

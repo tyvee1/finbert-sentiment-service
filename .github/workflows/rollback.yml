@@ -1,0 +1,114 @@
+# Model rollback — move the production alias back to the previously promoted
+# version.
+#
+# Kept in its own workflow rather than as a job in ci-cd.yml, for two reasons:
+# a rollback must be runnable on its own, without re-running a build; and
+# ci-cd.yml's job list is part of what the project specifies, so this does not
+# change it.
+#
+# ---------------------------------------------------------------------------
+# HOW THIS IS TRIGGERED, AND WHAT THE AUTOMATIC PATH CANNOT DO
+# ---------------------------------------------------------------------------
+# Two triggers:
+#
+#   workflow_dispatch  a human runs it from the Actions tab, optionally as a
+#                      dry run. This is the path to use.
+#
+#   workflow_run       it fires when test-and-deploy CONCLUDES IN FAILURE.
+#
+# The second one is honest about a limit rather than pretending not to have
+# it: `workflow_run` observes the whole workflow's conclusion, and GitHub
+# offers no cross-workflow trigger on a single JOB. So this cannot fire
+# specifically on the drift gate failing — it fires when anything in the
+# pipeline failed, including a lint error or a failed ECR push. The job below
+# therefore queries the triggering run and exits without acting unless the
+# `deepchecks` job is the one that failed. That check is the difference
+# between an automatic rollback and an automatic rollback on the wrong signal.
+#
+# A second limit, stated because it decides whether this is useful: the runner
+# needs to reach the MLflow tracking server to move an alias. A tracking
+# server on a laptop is not reachable from a GitHub runner. This workflow is
+# therefore operative only where MLFLOW_TRACKING_URI points at a reachable
+# server, supplied as a repository secret. Without that secret the job stops
+# with a clear message instead of reporting a rollback that did not happen.
+
+name: model-rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report the change without making it"
+        type: boolean
+        default: true
+  workflow_run:
+    workflows: ["test-and-deploy"]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'failure'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Only the registry client is needed, so the full development set is not
+      # installed: a rollback should be the fastest thing in the repository.
+      - name: Install the registry client
+        run: pip install "mlflow==2.16.2" "python-dotenv==1.0.1"
+
+      - name: Confirm the drift gate is what failed
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          # workflow_run fires on the whole pipeline failing. Without this
+          # step, a lint error would roll production back — a rollback
+          # triggered by the wrong signal is worse than no automation.
+          conclusion="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs" \
+            --jq '.jobs[] | select(.name=="deepchecks") | .conclusion')"
+          echo "deepchecks job concluded: ${conclusion:-<not found>}"
+          if [ "${conclusion:-}" != "failure" ]; then
+            echo "::notice::the drift gate did not fail; not rolling back"
+            echo "SKIP_ROLLBACK=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Check the tracking server is configured
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MLFLOW_TRACKING_URI:-}" ]; then
+            echo "::error::MLFLOW_TRACKING_URI is not set as a repository secret."
+            echo "A runner cannot reach a tracking server that is not published."
+            echo "Nothing has been rolled back. Run scripts/rollback_model.py"
+            echo "from a host that can reach the registry instead."
+            exit 1
+          fi
+
+      - name: Roll the production alias back
+        if: env.SKIP_ROLLBACK != '1'
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MODEL_NAME: finbert
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python scripts/rollback_model.py --dry-run
+          else
+            python scripts/rollback_model.py
+          fi

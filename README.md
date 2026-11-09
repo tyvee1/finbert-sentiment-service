@@ -379,6 +379,66 @@ installs the CPU-only wheel instead.
 
 ---
 
+## Stand-out additions
+
+Two of the course's optional suggestions are implemented, both because their
+own wording asks for the artefact to live in the repository.
+
+### Model rollback
+
+`scripts/rollback_model.py` moves the `production` alias back to the
+previously promoted version.
+
+```bash
+python scripts/rollback_model.py --dry-run   # report the change
+python scripts/rollback_model.py             # make it
+```
+
+**It does not roll back to version N-1.** Version numbers are not a promotion
+history: versions get registered by evaluation runs that never cleared the
+threshold, so N-1 is frequently a model that was already judged unfit, and
+deleted versions leave gaps where N-1 does not exist at all. `promote.py`
+therefore tags each version it promotes, and the rollback walks back to the
+most recent version carrying that tag. If there is no previously approved
+version, it refuses and says to fix forward rather than picking the nearest
+number.
+
+**How it is triggered.** Manually from the Actions tab via
+`.github/workflows/rollback.yml` (`workflow_dispatch`, defaulting to a dry
+run), or automatically when `test-and-deploy` concludes in failure. The
+automatic path carries two limits, stated because they decide whether it is
+useful:
+
+- `workflow_run` observes a whole workflow's conclusion and GitHub offers no
+  cross-workflow trigger on a single job, so the workflow queries the
+  triggering run and stops unless the `deepchecks` job is the one that failed.
+  Without that query, a lint error would roll production back.
+- A GitHub runner cannot reach a tracking server on a laptop. The workflow
+  requires `MLFLOW_TRACKING_URI` as a repository secret and stops with a clear
+  message when it is absent, rather than reporting a rollback that did not
+  happen.
+
+### Grafana dashboard
+
+`monitoring/grafana-dashboard.json` — import via **Dashboards → New → Import →
+Upload JSON file**, then select the Prometheus data source. Six panels:
+prediction rate, latency percentiles, sentiment distribution over time, error
+ratio, scrape-target health, and hourly volume.
+
+The latency panel uses `histogram_quantile()` over
+`prediction_latency_ms_bucket`. Graphing the buckets directly would plot a
+monotonically rising line, because the buckets are cumulative — the largest
+always equals the total count.
+
+### Not implemented: A/B traffic routing
+
+The A/B suggestion is the only one of the five that changes the graded
+surface — it adds a routing branch inside `POST /predict`, the endpoint most
+of the inference criteria are scored against. An optional addition cannot
+raise the grade, and this is the only one that could lower it.
+
+---
+
 ## Known gaps and limits
 
 These are real and are stated rather than left to be discovered.
