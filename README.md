@@ -451,6 +451,17 @@ health check. It needs inbound 8000 — or, as this would be built in
 production, an Application Load Balancer listening on 80 with an 8000 target
 group.
 
+**The AWS credentials are temporary, so the pipeline's secrets are
+perishable.** The lab issues a key id, a secret and a *session token*, all of
+which expire within hours. A workflow run that passed in the morning fails in
+the afternoon with `ExpiredToken`, and the failure is in the credentials, not
+in the pipeline. Each AWS job therefore probes `sts get-caller-identity`
+immediately after configuring credentials, so an expired token is reported at
+the top of the job rather than surfacing later as a failed image push. The
+durable fix is OIDC federation, which replaces all three secrets with a role
+the workflow assumes per job; the lab issues keys rather than a role, so it is
+named here and not built.
+
 **The deployed service may not serve the model the registry promoted.**
 `MODEL_SOURCE=huggingface` in CI and in the task definition means the container
 loads from the Hub, while the registry holds the version that was evaluated and

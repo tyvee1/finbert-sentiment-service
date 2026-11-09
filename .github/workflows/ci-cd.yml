@@ -37,7 +37,13 @@ on:
 #   Security group    finbert-sg
 #
 # Repository secrets required:
-#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, ECR_REGISTRY
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+#   AWS_REGION, ECR_REGISTRY
+#
+# AWS_SESSION_TOKEN is not optional here. The credentials are temporary and
+# expire within hours, so these secrets are perishable: a workflow that passed
+# this morning fails this afternoon with ExpiredToken, and the fix is to
+# refresh the secrets rather than to debug the pipeline.
 #
 # A note on the security group, because it is wrong as the instructions give
 # it: finbert-sg is specified with inbound HTTP on port 80, while the container
@@ -197,14 +203,43 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ secrets.AWS_REGION }}
-          # aws-session-token is deliberately NOT set. It applies only to
-          # temporary credentials; passing an empty string breaks request
-          # signing with an opaque error. The right answer for a public
-          # repository is no long-lived keys at all — OIDC federation, which
-          # replaces these two secrets with `role-to-assume` and a
-          # `permissions: id-token: write` grant. Left as keys here because
-          # that is what the project specifies.
+          # The session token is REQUIRED, because the credentials this project
+          # is run with are temporary. A key id and secret that came with a
+          # session token are not usable without it: every request is signed
+          # with all three, and omitting the token produces
+          # InvalidClientTokenId — which reads like a wrong key rather than a
+          # missing one.
+          #
+          # Temporary credentials also EXPIRE, usually within hours. When they
+          # do, this step still SUCCEEDS and the first ECR or ECS call fails
+          # with ExpiredToken several steps later. The probe that follows
+          # checks the identity immediately, so the failure names its own
+          # cause.
+          #
+          # Moving to long-lived IAM user keys later means deleting the
+          # AWS_SESSION_TOKEN secret AND this line: an empty string here
+          # breaks signing just as surely as a missing token does.
+          # OIDC federation remains the production answer — it replaces
+          # all three secrets with `role-to-assume` and a
+          # `permissions: id-token: write` grant, so nothing long-lived or
+          # short-lived has to be copied into a repository at all. Not used
+          # here because the lab issues keys rather than a role to assume.
+
+      - name: Confirm the credentials are live
+        run: |
+          set -euo pipefail
+          # Temporary credentials expire. Without this, an expired token
+          # surfaces as a failed ECR push or a failed describe-task-definition,
+          # several steps from the cause.
+          if ! aws sts get-caller-identity --output text >/dev/null 2>&1; then
+            echo "::error::AWS credentials are not usable or have expired."
+            echo "The lab credentials this project uses are TEMPORARY."
+            echo "Refresh the repository secrets and re-run this workflow."
+            exit 1
+          fi
+          echo "authenticated to account $(aws sts get-caller-identity --query Account --output text)"
 
       - name: Log in to Amazon ECR
         id: login-ecr
@@ -256,7 +291,38 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
           aws-region: ${{ secrets.AWS_REGION }}
+          # The session token is REQUIRED, because the credentials this project
+          # is run with are temporary. A key id and secret that came with a
+          # session token are not usable without it: every request is signed
+          # with all three, and omitting the token produces
+          # InvalidClientTokenId — which reads like a wrong key rather than a
+          # missing one.
+          #
+          # Temporary credentials also EXPIRE, usually within hours. When they
+          # do, this step still SUCCEEDS and the first ECR or ECS call fails
+          # with ExpiredToken several steps later. The probe that follows
+          # checks the identity immediately, so the failure names its own
+          # cause.
+          #
+          # Moving to long-lived IAM user keys later means deleting the
+          # AWS_SESSION_TOKEN secret AND this line: an empty string here
+          # breaks signing just as surely as a missing token does.
+
+      - name: Confirm the credentials are live
+        run: |
+          set -euo pipefail
+          # Temporary credentials expire. Without this, an expired token
+          # surfaces as a failed ECR push or a failed describe-task-definition,
+          # several steps from the cause.
+          if ! aws sts get-caller-identity --output text >/dev/null 2>&1; then
+            echo "::error::AWS credentials are not usable or have expired."
+            echo "The lab credentials this project uses are TEMPORARY."
+            echo "Refresh the repository secrets and re-run this workflow."
+            exit 1
+          fi
+          echo "authenticated to account $(aws sts get-caller-identity --query Account --output text)"
 
       - name: Download the current task definition
         run: |
