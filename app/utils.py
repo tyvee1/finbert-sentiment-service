@@ -108,3 +108,43 @@ def load_classifier():
     return repair_label_mapping(
         mlflow.transformers.load_model(f"models:/{model_name}@{model_alias}")
     )
+
+
+def load_candidate_classifier():
+    """Load the A/B candidate model from the MLflow Model Registry.
+
+    Always from MLflow, regardless of ``MODEL_SOURCE``. The candidate exists to
+    compare a *registered version* against what is serving, and the Hub has no
+    notion of a version this project promoted — loading a candidate from the
+    Hub would compare the production model against itself and report a
+    difference of zero as if it were a result.
+
+    Reference resolution, highest precedence first:
+      ``AB_CANDIDATE_VERSION``  an exact version number, e.g. "9"
+      ``AB_CANDIDATE_ALIAS``    an alias, default "candidate"
+
+    A version pin is preferred for a real comparison: an alias can be moved
+    underneath a running experiment, at which point the two arms of the test
+    are no longer the two models whose numbers are being compared.
+
+    Raises:
+        Exception: whatever MLflow raises. The caller in ``lifespan`` catches
+            it deliberately — an absent registry must not take the service
+            down — and records the reason for ``/ab-status``.
+    """
+    import mlflow.transformers
+
+    model_name = os.getenv("MODEL_NAME", "finbert")
+    version = os.getenv("AB_CANDIDATE_VERSION", "").strip()
+    alias = os.getenv("AB_CANDIDATE_ALIAS", "candidate").strip() or "candidate"
+    ref = (
+        f"models:/{model_name}/{version}" if version
+        else f"models:/{model_name}@{alias}"
+    )
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+    print(f"Loading A/B candidate from MLflow: {ref}")
+    mlflow.set_tracking_uri(tracking_uri)
+    # Repaired like the primary: the published checkpoint's numeric id2label
+    # is a property of the checkpoint, so a candidate registered from it has
+    # the same defect and would return 2.0 instead of "positive".
+    return repair_label_mapping(mlflow.transformers.load_model(ref))

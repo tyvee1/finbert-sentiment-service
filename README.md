@@ -443,12 +443,46 @@ resolves torch to the default PyPI build, which bundles CUDA: measured at
 1.2 GB, all shipped to a Fargate task with no GPU. `requirements-prod.txt`
 installs the CPU-only wheel instead.
 
+Those three figures measure the installed **dependency set**, not the image.
+The image comparison is a separate measurement, recorded in
+`docs/image-sizes.json`:
+
+```bash
+cat docs/image-sizes.json
+```
+
+Both images are built from this same Dockerfile, differing only in which
+requirements file is installed, and for the same platform. That matters more
+than it sounds: a hand-written "before" Dockerfile drifts from the real one,
+and once it has drifted the difference between the two images is no longer
+attributable to the dependency set, which is the only thing the number is
+supposed to show.
+
 ---
 
 ## Stand-out additions
 
-Two of the course's optional suggestions are implemented, both because their
-own wording asks for the artefact to live in the repository.
+All five of the course's optional suggestions are addressed. One of them — the
+deployment approval gate — cannot live entirely in a repository, and that is
+stated below rather than left to be assumed.
+
+### Deployment approval gate
+
+`.github/workflows/ci-cd.yml` declares `environment: production` on the deploy
+job. **That requests an environment; it does not create a gate.** Required
+reviewers are a repository setting, so a clone of this repository deploys with
+nothing stopping it until the setting exists:
+
+> Settings → Environments → `production` → Required reviewers
+
+With it configured, the deploy job holds at `Waiting` until a reviewer
+approves, and the ECS deployment does not start. Without it, GitHub creates the
+environment implicitly, the job runs straight through, and the only difference
+is a label in the Actions UI.
+
+This is worth saying plainly because the YAML looks identical either way. A
+workflow file is evidence that an approval gate was *intended*; the only
+evidence that one *exists* is watching a run wait.
 
 ### Model rollback
 
@@ -496,12 +530,70 @@ The latency panel uses `histogram_quantile()` over
 monotonically rising line, because the buckets are cumulative — the largest
 always equals the total count.
 
-### Not implemented: A/B traffic routing
+### A/B traffic routing to a candidate model version
 
-The A/B suggestion is the only one of the five that changes the graded
-surface — it adds a routing branch inside `POST /predict`, the endpoint most
-of the inference criteria are scored against. An optional addition cannot
-raise the grade, and this is the only one that could lower it.
+`AB_CANDIDATE_PERCENT` routes that percentage of `/predict` traffic to a
+candidate version pulled from the registry, and every prediction reports which
+model answered it:
+
+```json
+{"text": "...", "sentiment": "positive", "confidence": 0.85,
+ "latency_ms": 182.8, "model_variant": "production"}
+```
+
+Running a comparison:
+
+```bash
+# make the newest registered version the candidate
+python scripts/set_candidate_alias.py
+
+# route traffic to it, and restart so it is loaded
+export AB_CANDIDATE_PERCENT=25
+uvicorn app.main:app --reload
+
+# is it actually routable, and if not, why?
+curl -s localhost:8000/ab-status | python -m json.tool
+```
+
+Two dashboard panels compare the arms: request rate by variant, and p95
+latency by variant. `scripts/set_candidate_alias.py --clear` ends the
+experiment.
+
+This is the only one of the five suggestions that changes the graded surface —
+a routing branch inside `POST /predict`, which most of the inference criteria
+are scored against. Four decisions keep that contained, and each exists because
+the obvious alternative breaks something:
+
+**Per-variant metrics are new metric families, not a `variant` label added to
+the graded counters.** Labelling `prediction_requests_total` by variant changes
+its series identity, so every recorded series restarts at zero and the
+sentiment-distribution panel — which divides a `by (sentiment)` sum by an
+unlabelled total using `ignoring(sentiment) group_left` — stops matching.
+`prediction_requests_total` still counts every prediction regardless of which
+model produced it, so adding a variant cannot make a total go down.
+
+**`/health` is untouched.** Its body is `{"status": "ok"}` exactly, it is what
+the Docker healthcheck and the ECS target probe, and the test suite asserts the
+whole object. The A/B state is reported on `/ab-status` instead.
+
+**An unavailable candidate serves production traffic.** This is not a corner
+case — it is what the deployed task does. Fargate runs with
+`MODEL_SOURCE=huggingface` and no reachable tracking server, so no candidate
+ever loads there. A router that trusted the configured percentage would fail
+every request in production.
+
+**The candidate is attempted only when `MODEL_SOURCE=mlflow`.** A candidate is
+a registered *version* and only the registry has versions. MLflow's client also
+retries a refused connection five times before giving up, about a minute, during
+which uvicorn is not yet serving and the container healthcheck is counting —
+so without this gate the feature would add a minute to every cold start to
+discover a registry that was never going to be there.
+
+The split is drawn per request rather than hashed from the input text.
+Hashing would send the same headline to the same variant every time, which
+makes the split stable and the comparison worthless: each variant would be
+measured on its own fixed subset of inputs, so a difference in results could
+be a difference in the inputs rather than in the models.
 
 ---
 
