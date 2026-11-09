@@ -88,6 +88,15 @@ jobs:
           fi
 
       - name: Check the tracking server is configured
+        # Guarded on the same flag as the rollback itself. Without this the
+        # step ran whatever the previous one decided, so a pipeline that
+        # failed for ANY other reason — a deploy error, a lint error — ended
+        # with this job failing over a secret it was never going to use. The
+        # determination step had already concluded "the drift gate did not
+        # fail; not rolling back", and then the job went red anyway.
+        #
+        # A flag that nothing reads is not a decision.
+        if: env.SKIP_ROLLBACK != '1'
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
         run: |
