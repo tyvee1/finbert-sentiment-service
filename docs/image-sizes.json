@@ -1,0 +1,18 @@
+{
+  "before_mb": 3429,
+  "after_mb": 567,
+  "saved_mb": 2862,
+  "saved_percent": 83.5,
+  "before": {
+    "requirements": "requirements.txt",
+    "note": "the development set; resolves torch to the default PyPI build, which bundles CUDA",
+    "also_includes": "a C++ build toolchain (build-essential). requirements.txt pins fasttext==0.9.3, which publishes no wheel for CPython 3.12, so the naive image cannot be built without a compiler. Part of the saving below is therefore the toolchain and not torch \u2014 though the CUDA stack is the larger share by roughly an order of magnitude."
+  },
+  "after": {
+    "requirements": "requirements-prod.txt",
+    "note": "runtime only, CPU-only torch wheel from the PyTorch index, installed with --no-cache-dir"
+  },
+  "platform": "linux/amd64",
+  "measured_utc": "2026-11-09T22:08:08Z",
+  "method": "both images built from this repository's Dockerfile, differing only in the requirements file installed; sizes from `docker image inspect --format {{.Size}}`"
+}
