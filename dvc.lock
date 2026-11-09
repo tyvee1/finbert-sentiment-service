@@ -20,3 +20,23 @@ stages:
       hash: md5
       md5: b08f1697fe42e889e713f7b47a876848
       size: 85005
+  prepare:
+    cmd: python scripts/load_data.py
+    deps:
+    - path: scripts/load_data.py
+      hash: md5
+      md5: 286f84bdbbaff728d5095a5c109fd473
+      size: 1802
+    params:
+      params.yaml:
+        prepare.random_seed: 42
+        prepare.test_size: 0.2
+    outs:
+    - path: data/test.csv
+      hash: md5
+      md5: 4bcf86ff63c2a4223937b3bbe31dd748
+      size: 249017
+    - path: data/train.csv
+      hash: md5
+      md5: dfb71fd4e0b430a31489d6a4aa63da80
+      size: 999834
