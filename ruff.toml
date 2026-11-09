@@ -1,0 +1,41 @@
+# Lint configuration — the reason this file exists
+#
+# The CI lint job runs `pip install ruff` with no version bound, then
+# `ruff check`. With no configuration, the rules applied are whatever the
+# newest ruff release happens to default to, and those defaults widen over
+# time. Measured: ruff 0.17.4 reports 11 errors against the UNMODIFIED starter
+# code — unsorted imports, a blind `except Exception`, a deprecated
+# `timezone.utc` alias, an unused import. Every other job in the pipeline
+# declares `needs: lint`, so on a fresh runner the lint job fails and the test,
+# drift, build and deploy jobs never execute at all. A red pipeline, and not
+# because of anything in the project.
+#
+# Two changes close it, and they are different kinds of fix:
+#   * ruff is PINNED in the workflow, so the gate's behaviour is a property of
+#     this repository rather than of the day it was run;
+#   * the rule set is SELECTED here explicitly, so upgrading the pin is a
+#     deliberate decision with a visible diff instead of a silent widening.
+#
+# The selection is wider than ruff's default, not narrower. E402 in particular
+# is switched ON, which the default set omits: two scripts legitimately need
+# `sys.path` adjusted before importing from the project, and with E402 active
+# those imports carry a `# noqa: E402` that says so at the site. Turning the
+# rule off instead would silence the explanation along with the warning.
+
+line-length = 100
+target-version = "py312"
+
+[lint]
+select = [
+    "E",    # pycodestyle errors, including E402 module-level import not at top
+    "F",    # pyflakes
+    "I",    # import sorting
+    "UP",   # pyupgrade — catches APIs deprecated in the target Python
+    "B",    # flake8-bugbear
+    "BLE",  # blind except
+    "RUF",  # ruff's own rules, including unused-noqa
+]
+
+[lint.per-file-ignores]
+# Tests deliberately construct failing stand-ins and assert on broad behaviour.
+"tests/*" = ["B011"]

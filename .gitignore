@@ -1,0 +1,106 @@
+# ---------------------------------------------------------------------------
+# .gitignore for the Course 1 project repository
+#
+# Copy this to the repo root as `.gitignore` BEFORE the first `git add`.
+# Order matters: a file ignored after it has already been committed stays in
+# history, and on a public repo that history is published.
+#
+# Two jobs here:
+#   1. keep credentials and local state out of the repo entirely
+#   2. keep the submission to the files the rubric asks for
+# ---------------------------------------------------------------------------
+
+# ---- credentials and local environment ------------------------------------
+# The first block is the one that matters. Everything here is either a
+# credential or a file that conventionally holds one.
+.env
+.env.*
+!.env.example
+credentials
+config.ini
+.netrc
+.pypirc
+*.pem
+*.key
+id_rsa
+id_ed25519
+.aws/
+.aws-sam/
+
+# ---- the virtual environment ----------------------------------------------
+# Each coursework project gets its own venv, destroyed at teardown. It never
+# belongs in the repo: it is large, platform-specific, and can contain
+# absolute paths from this machine.
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+
+# ---- infrastructure state --------------------------------------------------
+# Terraform state is plaintext and routinely contains secrets pulled from
+# resource attributes. This stays listed even while the project uses no IaC,
+# so that adding Terraform later cannot accidentally publish state.
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+
+# ---- ML artefacts ----------------------------------------------------------
+# Large binaries do not belong in git. The model the project serves should be
+# fetched from the registry or the Hub at build time, which is also what makes
+# the deployment traceable to a version.
+*.pkl
+*.joblib
+*.pt
+*.pth
+*.onnx
+*.h5
+*.safetensors
+mlruns/
+mlartifacts/
+.dvc/cache/
+.dvc/tmp/
+data/raw/
+data/interim/
+*.parquet
+*.db
+*.sqlite3
+
+# ---- local tooling and scratch --------------------------------------------
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+.idea/
+.vscode/
+
+# ---- submission hygiene ----------------------------------------------------
+# Graded submissions carry only what the instructions and rubric require, so
+# preparation instruments and working notes stay out of the repo. These are
+# run from a sibling directory, never committed.
+submission-prep/
+scratch/
+notes-local/
+
+# ---- additions specific to this project -----------------------------------
+# The deepchecks language-model cache. lid.176.bin is ~126 MB and is fetched
+# from dl.fbaipublicfiles.com on first use; it is a cache, not a deliverable.
+.deepchecks_models/
+
+# Kept from the starter's own .gitignore.
+/models
+
+# DVC stage outputs are tracked by DVC, not git. `dvc repro` writes a
+# data/.gitignore listing them, which IS committed — that file is how a
+# cloner knows which paths DVC owns.

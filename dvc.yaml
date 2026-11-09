@@ -1,0 +1,51 @@
+# DVC data preparation pipeline (Task 1)
+#
+# Two stages, deliberately independent of each other:
+#
+#   prepare  downloads the labelled financial-headline dataset from HuggingFace
+#            and splits it into train/test. This is the EVALUATION data — the
+#            ground truth the model is scored against in Task 2.
+#
+#   clean    normalises the raw Bluesky social stream into model-ready text.
+#            This is the INFERENCE data — unlabelled production-like traffic,
+#            replayed by monitoring/stream.py and used as the "current" dataset
+#            in the drift gate.
+#
+# They share no inputs and no outputs, so `dvc repro` runs them in either order
+# and re-runs only the one whose dependencies changed.
+#
+# ---------------------------------------------------------------------------
+# A reproducibility limit worth stating rather than discovering later
+# ---------------------------------------------------------------------------
+# `prepare` has no data dependency, only a script dependency. Its real input is
+# a remote HuggingFace dataset named by the HF_DATASET_ID environment variable,
+# and neither the dataset nor a pinned revision of it is a tracked dep. So DVC
+# will report this stage as up to date after the upstream dataset changes, and
+# `dvc repro` reproduces the PIPELINE faithfully without reproducing the DATA.
+# dvc.lock records the hash of the outputs that were produced, which is what
+# makes the drift detectable after the fact, but it cannot prevent the silent
+# substitution. Pinning a dataset revision is the fix; the course does not
+# teach it and the rubric does not ask for it, so it is documented in the
+# README rather than bolted on here.
+stages:
+  prepare:
+    cmd: python scripts/load_data.py
+    deps:
+      - scripts/load_data.py
+    params:
+      - prepare.test_size
+      - prepare.random_seed
+    outs:
+      - data/train.csv
+      - data/test.csv
+
+  clean:
+    cmd: python scripts/clean_data.py
+    deps:
+      - scripts/clean_data.py
+      - data/raw_stream.csv
+    params:
+      - clean.min_words
+      - clean.max_words
+    outs:
+      - data/stream.csv

@@ -1,0 +1,28 @@
+# Prometheus scrape configuration (Task 6)
+#
+# The target `api:8000` is the Docker Compose SERVICE NAME, not a hostname the
+# host machine can resolve. Compose puts every service on a shared user-defined
+# bridge network with an embedded DNS resolver, so `api` resolves to the API
+# container's address only for another container ON THAT NETWORK.
+#
+# That has a consequence the specification does not mention: a Prometheus
+# running on the host, or in an unrelated container, resolves `api` to nothing
+# and this scrape job silently reports the target as down — a configuration
+# that is syntactically correct and operationally dead. Prometheus is therefore
+# defined as a service in docker-compose.yml alongside the API, so the name it
+# is told to scrape is a name it can actually resolve.
+#
+# scrape_interval is set per job rather than only globally. The global value is
+# a default; stating it on the job means a later change to the global does not
+# silently re-time this one.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: "finbert-api"
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "api:8000"

@@ -1,0 +1,16 @@
+prepare:
+  data_dir: "data"
+  test_size: 0.2
+  random_seed: 42
+
+clean:
+  data_dir: "data"
+  min_words: 10
+  max_words: 100
+
+promote:
+  f1_threshold: 0.56
+
+deepchecks:
+  property_drift_threshold: 0.5
+  prediction_drift_threshold: 0.6

@@ -1,0 +1,76 @@
+# Development and CI dependency set. The container installs
+# requirements-prod.txt instead; see the comment at the top of that file.
+#
+# ---------------------------------------------------------------------------
+# Upper bounds added to the starter's pins, and the evidence for each
+# ---------------------------------------------------------------------------
+# The starter left transformers, torch and torchvision unbounded. Resolved
+# fresh on Python 3.12 they now pick up releases published after this course
+# was written, and one of them breaks Task 2 outright. Both arms were run:
+#
+#   transformers 5.22.2  mlflow.transformers.log_model FAILS. MLflow 2.16.2's
+#                        transformers flavour imports FlaxPreTrainedModel,
+#                        removed in transformers 5. The import failure makes
+#                        MLflow's framework detection fall through to
+#                        TensorFlow, and the visible error is
+#                        "ModuleNotFoundError: No module named 'tensorflow'".
+#   transformers 4.57.6  log_model succeeds, the model registers, and the
+#                        production alias resolves.
+#
+# sentence-transformers is bounded as a consequence, not a preference:
+# deepchecks[nlp] requires sentence-transformers>=3.0.0, and version 6 requires
+# transformers>=5.0.0. Left unbounded it drags the resolution back over the
+# line and reintroduces the failure above. With <6 it resolves to 5.7.0 and
+# `pip check` reports no broken requirements.
+#
+# torch is bounded below 3 for the ordinary reason — a major version of the
+# tensor library underneath the model is not a transparent upgrade.
+
+# Core data
+pandas>=2.0.0
+pyyaml>=6.0
+
+# Model
+transformers>=4.40.2,<5
+torch>=2.4.0,<3
+torchvision>=0.19.0,<1
+datasets==2.19.1
+scikit-learn>=1.3.0,<1.4.0
+setuptools>=69.0,<71.0
+
+# API
+requests==2.32.3
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+pydantic==2.7.1
+python-dotenv==1.0.1
+
+# MLflow
+mlflow==2.16.2
+boto3==1.34.101
+
+# DVC
+dvc==3.50.1
+pathspec>=0.10.3,<0.12
+
+# Monitoring
+prometheus-client==0.20.0
+
+# Testing
+pytest==8.2.0
+httpx==0.27.0
+locust==2.28.0
+
+# Model validation
+deepchecks[nlp]==0.19.1
+# Keeps deepchecks[nlp] on the transformers 4.x line — see the note above.
+sentence-transformers<6
+# deepchecks declares `fasttext<0.9.3` for its nlp-properties extra while this
+# pin is ==0.9.3. The extra is not installed, so pip raises no conflict, and
+# 0.9.3 loads the language model correctly. Worth knowing because fasttext
+# 0.9.3 publishes exactly one wheel — cp39, macOS arm64 — so on Python 3.12 it
+# compiles from source and needs a C++ toolchain present. On macOS that means
+# the Xcode command line tools: `xcode-select --install`. This is the single
+# most likely first-run install failure in this dependency set.
+fasttext==0.9.3
+category-encoders==2.6.3

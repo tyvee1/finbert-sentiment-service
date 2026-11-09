@@ -1,0 +1,86 @@
+# Local orchestration for the inference service and its metrics scraper.
+#
+#   docker compose up --build
+#   docker compose down -v
+#
+# ---------------------------------------------------------------------------
+# Two details that decide whether this works at all
+# ---------------------------------------------------------------------------
+#
+# "8000:8000" IS QUOTED. Unquoted, YAML reads 8000:8000 as a sexagesimal
+# integer — base-60 — and the port mapping silently becomes the number
+# 28800000. Compose then reports a confusing type error, or on some versions
+# binds nothing. Every port mapping in this file is a quoted string.
+#
+# start_period ON THE HEALTHCHECK. FinBERT takes tens of seconds to load
+# (longer on the first run, when the weights are still being downloaded).
+# Without start_period the container fails its first three health probes while
+# it is legitimately starting, is marked unhealthy, and anything depending on
+# it never starts. The same mistake in an ECS task definition makes the service
+# restart-loop forever: the task is killed for being unhealthy before it has
+# ever finished loading, which reads in the console as a crash with no error.
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: finbert-api:local
+    container_name: finbert-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # The MLflow tracking server runs on the HOST and writes run metadata to
+      # ./mlruns and model artifacts to ./mlartifacts. Mounting both read-only
+      # lets the container resolve models:/finbert@production without being
+      # able to modify the registry — a container that can rewrite the registry
+      # it loads from can promote itself.
+      - ./mlruns:/app/mlruns:ro
+      - ./mlartifacts:/app/mlartifacts:ro
+    extra_hosts:
+      # Linux does not resolve host.docker.internal on its own; host-gateway is
+      # the documented alias for the host from inside the container. On macOS
+      # and Windows Docker Desktop provides the name already, and this entry is
+      # harmless there — which is what makes it safe to commit rather than
+      # leaving a platform-specific step in the README.
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # Probes GET /health. A Python one-liner rather than curl, because
+      # python:3.12-slim ships no curl and adding it means an apt layer in the
+      # production image for the sake of a health probe. urlopen raises on a
+      # 503, which exits non-zero — exactly the required behaviour.
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen("http://localhost:8000/health", timeout=5)
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+    restart: unless-stopped
+
+  prometheus:
+    # prometheus.yml is told to scrape the target `api:8000`. That name is a
+    # Compose service name, resolvable only by a container on this network, so
+    # Prometheus has to live here for that configuration to point at anything.
+    # Pinned to an exact tag: :latest would make the monitoring stack change
+    # underneath the project between runs.
+    image: prom/prometheus:v2.54.1
+    container_name: finbert-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=24h
+    depends_on:
+      api:
+        # Wait for healthy, not merely for started: Prometheus scraping a
+        # still-loading API records the target as down and the first minutes of
+        # every run look like an outage.
+        condition: service_healthy
+    restart: unless-stopped
