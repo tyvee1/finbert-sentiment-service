@@ -1,0 +1,26 @@
+# Grafana dashboard provisioning.
+#
+# Points Grafana at a directory of dashboard JSON files and loads them at
+# start. Provisioned rather than imported by hand for the same reason as the
+# datasource: anything added through the UI lives in Grafana's database, which
+# `docker compose down -v` removes. A dashboard that has to be re-imported by
+# hand after every teardown is a file in the repository, not a working one.
+#
+# allowUiUpdates is false, so the file in the repository stays authoritative.
+# With it true, an edit in the browser wins until the next restart and then
+# silently reverts — changes made and apparently saved, gone.
+apiVersion: 1
+
+providers:
+  - name: finbert
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      # The directory the dashboards live in inside the container. Compose
+      # mounts ./monitoring here read-only.
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

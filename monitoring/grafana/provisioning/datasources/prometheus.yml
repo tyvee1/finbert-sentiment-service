@@ -1,0 +1,25 @@
+# Grafana datasource provisioning.
+#
+# Provisioned as a file rather than clicked in the UI, for the reason that
+# decides whether a dashboard is a deliverable or a screenshot: a datasource
+# added by hand lives in Grafana's own database, which `docker compose down -v`
+# destroys. A reviewer who brings the stack up would then open a dashboard
+# wired to a datasource that does not exist and see "No data" on every panel —
+# indistinguishable from the service not emitting metrics.
+#
+# The URL is http://prometheus:9090, the COMPOSE SERVICE NAME. localhost would
+# resolve to the Grafana container itself. The same trap as `api:8000` in
+# prometheus.yml, one layer further out.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    # uid is pinned because the dashboard JSON refers to its datasource by uid.
+    # Letting Grafana generate one means the provisioned dashboard points at a
+    # uid that does not exist, and every panel renders empty with no error.
+    uid: finbert-prometheus
+    editable: false

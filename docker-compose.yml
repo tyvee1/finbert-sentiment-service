@@ -84,3 +84,31 @@ services:
         # every run look like an outage.
         condition: service_healthy
     restart: unless-stopped
+
+  grafana:
+    # The dashboard in monitoring/ is only a deliverable if something loads it.
+    # Without this service the JSON sits in the repository and nobody — the
+    # author included — ever sees whether its queries match the metric names
+    # the service actually emits. A panel with a typo renders "No data", which
+    # looks like a broken service rather than a broken query.
+    image: grafana/grafana:11.2.0
+    container_name: finbert-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      # Anonymous viewing, so a reviewer can open the dashboard without an
+      # account. Admin stays password-protected. This is a LOCAL stack behind
+      # no network; the same settings on anything reachable would be wrong.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:-admin}"
+    volumes:
+      # Datasource and dashboard provider definitions.
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      # The dashboards themselves. The provider reads this directory.
+      - ./monitoring:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_started
+    restart: unless-stopped

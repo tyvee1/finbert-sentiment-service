@@ -20,17 +20,32 @@
 #    CPU-only Fargate task. The CPU-only build removes all of it.
 #
 # HOW THE CPU WHEEL IS SELECTED. The `+cpu` local version identifier is
-# published only on PyTorch's own index, so pip cannot satisfy this requirement
+# published only on PyTorch's own index, so pip cannot satisfy that requirement
 # from PyPI and must take it from the extra index. That is deliberate — an
 # unqualified `torch>=2.4.0` with the extra index present would still resolve
 # to the CUDA build from PyPI, and the image would silently be 3 GB larger with
 # nothing in the build log to say so.
 #
+# WHY THE PIN IS SPLIT BY ARCHITECTURE. On arm64 the resolver offers `+cpu`
+# wheels only from 2.6.0 upward, so `torch==2.4.1+cpu` cannot be satisfied
+# there from any index. A native `docker compose up --build` on Apple silicon
+# failed with "No matching distribution found for torch==2.4.1+cpu", while
+# `docker build --platform linux/amd64` on the same machine succeeded: the pin
+# was right for the platform that deploys and impossible on the one a reviewer
+# builds on.
+#
+# The marker splits those two cases without weakening either. The first line
+# governs every image that is ever deployed — Fargate runs X86_64, the CI
+# pipeline builds on an amd64 runner, and a hand build must pass
+# `--platform linux/amd64` — so the CUDA-avoidance guarantee above still holds
+# everywhere it matters. The second line exists only so the stack can be
+# brought up natively on an arm64 laptop. No image built from it is pushed or
+# deployed, and the size figures below are not claimed for it.
+#
 # NOT VERIFIED HERE: download.pytorch.org is not reachable from the environment
-# these files were written in, so the exact wheel's availability for
-# cp312/linux was not confirmed by resolution. `make verify` (stage
-# `image-size`) performs that resolution and records the before/after image
-# sizes on the machine that builds the image.
+# these files were written in, so neither wheel's availability was confirmed by
+# resolution. `make verify` (stage `image-size`) performs that resolution and
+# records the before/after image sizes on the machine that builds the image.
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Model runtime.
@@ -38,7 +53,8 @@
 #   MLflow 2.16.2's transformers flavour imports FlaxPreTrainedModel, which
 #   transformers 5 removed. app/utils.py calls mlflow.transformers.load_model
 #   on the registry path, so the container needs the working combination too.
-torch==2.4.1+cpu
+torch==2.4.1+cpu ; platform_machine == "x86_64"
+torch==2.4.1     ; platform_machine != "x86_64"
 transformers>=4.40.2,<5
 
 # API.

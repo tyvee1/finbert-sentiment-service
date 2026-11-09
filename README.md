@@ -132,6 +132,41 @@ python scripts/run_deepchecks.py
 python monitoring/stream.py
 ```
 
+### Seeing the metrics, not just emitting them
+
+`monitoring/stream.py` drives traffic through the service and logs per-window
+summaries to MLflow. To watch the same traffic through Prometheus and Grafana,
+bring the whole stack up:
+
+```bash
+docker compose up --build -d
+
+# Prometheus: is the scrape target actually being collected?
+open http://localhost:9090/targets          # finbert-api should read UP
+
+# Grafana: the dashboard is provisioned, not imported by hand
+open http://localhost:3000                  # anonymous viewing is enabled
+
+# Generate some traffic to populate the panels
+python monitoring/stream.py
+
+docker compose down -v
+```
+
+Two things worth knowing, because both are silent when wrong:
+
+`prometheus.yml` scrapes `api:8000`. That is the **Compose service name**,
+resolvable only by a container on the same Compose network — which is why
+Prometheus is defined as a service here rather than run on the host. A
+Prometheus outside this network resolves `api` to nothing and reports the
+target as down, with a configuration file that reads as correct.
+
+The Grafana datasource and dashboard are **provisioned from files**, not added
+through the UI. Anything created in the browser lives in Grafana's own
+database, which `docker compose down -v` deletes — so a dashboard imported by
+hand has to be re-imported after every teardown, and is not really part of
+this repository.
+
 `dvc repro` must be run **in full**, not stage by stage. `dvc.lock` is a
 deliverable, and a lock produced by `dvc repro clean` alone contains one stage.
 Check it:
@@ -368,6 +403,23 @@ that will be pushed:
 docker buildx build --platform linux/amd64 -t finbert-api:local .
 ```
 
+Running the stack locally is the opposite case, and the two pull against each
+other. `torch==2.4.1+cpu` resolves only for x86_64 — on arm64 the PyTorch index
+offers `+cpu` wheels no earlier than 2.6.0 — so a native
+`docker compose up --build` on Apple silicon fails in `pip install` with
+`No matching distribution found for torch==2.4.1+cpu`, on the same machine
+where the `--platform linux/amd64` build above succeeds.
+
+Forcing amd64 in Compose as well would fix the build and create a worse
+problem: the container then runs emulated, and because `app/main.py` loads the
+model inside `lifespan`, uvicorn serves nothing at all until that finishes —
+`/metrics` included, so Prometheus would report the target down for as long as
+an emulated model load takes.
+
+`requirements-prod.txt` therefore pins torch per architecture, so a native
+local build works and the deployed image is unchanged. The `+cpu` pin still
+governs every image that ships.
+
 ### The image installs `requirements-prod.txt`, not `requirements.txt`
 
 `requirements.txt` is the development set — dvc, deepchecks, locust, pytest,
@@ -461,6 +513,23 @@ the top of the job rather than surfacing later as a failed image push. The
 durable fix is OIDC federation, which replaces all three secrets with a role
 the workflow assumes per job; the lab issues keys rather than a role, so it is
 named here and not built.
+
+**Automatic rollback needs a tracking server the runner can reach, and this
+project does not provide one.** `.github/workflows/rollback.yml` moves the
+`production` alias back to the previously promoted version. It can be run by
+hand from the Actions tab, and it also fires when the pipeline fails — but
+`workflow_run` reports the conclusion of a whole workflow and GitHub offers no
+cross-workflow trigger on a single job, so the job queries the triggering run
+and acts only when `deepchecks` is the job that failed. A rollback on the
+wrong signal, such as a lint error, is worse than no automation.
+
+The part that is not operative here: moving an alias requires reaching the
+MLflow tracking server, and this project's server runs on a laptop. A GitHub
+runner cannot reach it. Without `MLFLOW_TRACKING_URI` as a repository secret
+the job stops with a clear message instead of reporting a rollback that did
+not happen. This is honest rather than fixed, and it compounds with the next
+gap: when the deployed container loads from the Hub rather than the registry,
+moving a registry alias would not change what is being served anyway.
 
 **The deployed service may not serve the model the registry promoted.**
 `MODEL_SOURCE=huggingface` in CI and in the task definition means the container
