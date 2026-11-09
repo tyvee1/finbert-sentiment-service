@@ -312,9 +312,27 @@ def run_predictions(texts: list[str]) -> list[PredictionResult]:
         # was given is a bug, and silently truncating to the shorter of the two
         # would hand the caller predictions belonging to other inputs.
         for text, raw in zip(texts, raw_results, strict=True):
+            # The published checkpoint ships config.json with id2label stored as
+            # FLOATS, so an unpatched cache makes the pipeline return
+            # {"label": 2.0} instead of {"label": "positive"}. Left to Pydantic,
+            # that surfaces as a ValidationError on a field the caller never
+            # sent, the endpoint answers 500 with "Internal Server Error", and
+            # /health still answers 200 because the model itself loaded fine —
+            # three symptoms that point away from the actual cause. Naming the
+            # cause here costs one isinstance check per prediction and is the
+            # difference between a one-line fix and an afternoon.
+            label = raw["label"]
+            if not isinstance(label, str):
+                raise RuntimeError(
+                    "the model returned a non-string label "
+                    f"({label!r}, type {type(label).__name__}); the cached "
+                    "config.json has numeric id2label values and needs "
+                    "patching — run `python scripts/smoke_test.py`"
+                )
+
             result = PredictionResult(
                 text=text,
-                sentiment=raw["label"],
+                sentiment=label,
                 confidence=float(raw["score"]),
                 # 4 decimal places = 0.1 microsecond resolution. Enough that
                 # any real measurement is non-zero, few enough to read.

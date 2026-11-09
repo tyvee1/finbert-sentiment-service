@@ -15,6 +15,7 @@ down so that a reader can tell required coverage from padding:
     test_metrics_endpoint_exposes_prometheus .. /metrics via generate_latest
     test_request_counter_increments_per_prediction  counter per prediction
     test_error_counter_increments_on_failure .. error counter on exception
+    test_non_string_label_names_its_cause ..... a numeric label names its fix
     test_log_entries_are_json_with_required_fields  JSON log shape
 
 The first three are the three the specification names explicitly. The rest
@@ -254,6 +255,51 @@ def test_error_counter_increments_on_failure(client: TestClient):
             client.post("/predict", json={"text": HEADLINES[0]})
         after = _counter_total(client.get("/metrics").text, "prediction_errors_total")
         assert after - before == pytest.approx(1.0)
+    finally:
+        if saved is not None:
+            main.classifiers["sentiment"] = saved
+        else:  # pragma: no cover — only if the session fixture never loaded
+            main.classifiers.pop("sentiment", None)
+
+
+def test_non_string_label_names_its_cause(client: TestClient):
+    """A numeric label fails with a message naming the fix, not a bare 500.
+
+    This is the live failure mode, not a hypothetical one: the published
+    checkpoint stores ``id2label`` as floats, so a cache that has not been
+    patched makes the pipeline return ``{"label": 2.0}``. Left to the response
+    model, that surfaced as a ``ValidationError`` on a field the caller never
+    sent — the endpoint answered 500 with ``Internal Server Error`` while
+    ``/health`` answered 200, because the model had loaded perfectly well.
+
+    The assertion is on the MESSAGE, not just the exception type. A guard that
+    raises without naming its cause sends the next reader to the wrong layer,
+    which is the entire failure this test exists to prevent.
+    """
+
+    class NumericLabelClassifier:
+        """Reproduces an unpatched config.json: labels come back as floats."""
+
+        def __call__(self, texts, *args, **kwargs):
+            items = [texts] if isinstance(texts, str) else texts
+            return [{"label": float(i), "score": 0.5} for i, _ in enumerate(items)]
+
+    saved = main.classifiers.get("sentiment")
+    main.classifiers["sentiment"] = NumericLabelClassifier()
+    try:
+        before = _counter_total(client.get("/metrics").text, "prediction_errors_total")
+        with pytest.raises(RuntimeError) as caught:
+            client.post("/predict", json={"text": HEADLINES[0]})
+        message = str(caught.value)
+        assert "smoke_test.py" in message, (
+            f"the error must name the script that fixes it; got {message!r}"
+        )
+        assert "id2label" in message
+        after = _counter_total(client.get("/metrics").text, "prediction_errors_total")
+        assert after - before == pytest.approx(1.0), (
+            "the guard must raise inside run_predictions so the error counter "
+            "and the ERROR log line still fire"
+        )
     finally:
         if saved is not None:
             main.classifiers["sentiment"] = saved
