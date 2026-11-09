@@ -354,6 +354,30 @@ jobs:
             task-definition.json > /dev/null \
             || { echo "::error::no container named '$CONTAINER_NAME' in task definition '$TASK_DEFINITION'"; exit 1; }
 
+      # The image URI comes from the build job as an output. An empty one is
+      # possible — a renamed step id, a job that produced no output, an ECR
+      # login that yielded no registry — and the render action's own error for
+      # it is "Input required and not supplied: image", which names an input
+      # rather than the job that was supposed to provide it.
+      #
+      # Checking here turns that into a message naming the cause. The same
+      # reasoning as the label guard in the service: an error that points at
+      # the wrong layer costs more than the check that prevents it.
+      - name: Confirm the build job produced an image URI
+        env:
+          IMAGE_URI: ${{ needs.build.outputs.image }}
+        run: |
+          set -euo pipefail
+          if [ -z "${IMAGE_URI:-}" ]; then
+            echo "::error::the build job's \`image\` output is empty, so there is" \
+                 "nothing to deploy. The deploy job reads needs.build.outputs.image," \
+                 "which the build job sets from steps.build-image.outputs.image." \
+                 "Check that the build job completed, that its push step still has" \
+                 "id: build-image, and that it wrote image= to GITHUB_OUTPUT."
+            exit 1
+          fi
+          echo "deploying $IMAGE_URI"
+
       - name: Render the task definition with the new image
         id: render
         uses: aws-actions/amazon-ecs-render-task-definition@v1
