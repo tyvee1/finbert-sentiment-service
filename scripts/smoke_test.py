@@ -27,8 +27,18 @@ def download_and_patch_model(model_id: str) -> None:
     with open(config_path) as f:
         config = json.load(f)
 
-    config["id2label"] = {"0": "negative", "1": "neutral", "2": "positive"}
-    config["label2id"] = {"negative": "0", "neutral": "1", "positive": "2"}
+    # The mapping comes from app/utils.py so there is one definition of it.
+    # This script repairs the cache on disk; the service repairs the loaded
+    # model in memory. Two repairs disagreeing about which index is "positive"
+    # would be a silent mislabelling, so neither spells the mapping out.
+    try:
+        from app.utils import LABEL_NAMES
+    except ImportError:  # pragma: no cover - running from inside scripts/
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from app.utils import LABEL_NAMES
+
+    config["id2label"] = {str(i): name for i, name in LABEL_NAMES.items()}
+    config["label2id"] = {name: str(i) for i, name in LABEL_NAMES.items()}
 
     with open(config_path, "w") as f:
         json.dump(config, f, indent=2)

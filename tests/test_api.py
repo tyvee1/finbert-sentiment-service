@@ -16,6 +16,8 @@ down so that a reader can tell required coverage from padding:
     test_request_counter_increments_per_prediction  counter per prediction
     test_error_counter_increments_on_failure .. error counter on exception
     test_non_string_label_names_its_cause ..... a numeric label names its fix
+    test_repair_fixes_numeric_labels .......... load-time label repair
+    test_repair_leaves_a_correct_mapping_alone  and only when needed
     test_log_entries_are_json_with_required_fields  JSON log shape
 
 The first three are the three the specification names explicitly. The rest
@@ -38,7 +40,7 @@ import pytest
 from fastapi.testclient import TestClient
 from prometheus_client.parser import text_string_to_metric_families
 
-from app import main
+from app import main, utils
 
 VALID_SENTIMENTS = {"positive", "negative", "neutral"}
 
@@ -305,6 +307,92 @@ def test_non_string_label_names_its_cause(client: TestClient):
             main.classifiers["sentiment"] = saved
         else:  # pragma: no cover — only if the session fixture never loaded
             main.classifiers.pop("sentiment", None)
+
+
+# ---------------------------------------------------------------------------
+# The label-mapping repair (app/utils.py)
+#
+# The published checkpoint stores id2label as floats. scripts/smoke_test.py
+# repairs the cached config.json on disk, which is enough on a machine where
+# that script has run and nowhere else: a container downloads its own copy at
+# startup, so the deployed service answered 500 on every prediction while
+# /health answered 200. The repair therefore happens at LOAD, in process.
+# ---------------------------------------------------------------------------
+
+
+class _FakeConfig:
+    """The two attributes a pipeline's config exposes for labels."""
+
+    def __init__(self, id2label):
+        self.id2label = id2label
+        self.label2id = {}
+
+
+class _FakeModel:
+    def __init__(self, config):
+        self.config = config
+
+
+class _FakePipeline:
+    """Enough of a pipeline for the repair: `.model.config`."""
+
+    def __init__(self, id2label):
+        self.model = _FakeModel(_FakeConfig(id2label))
+
+
+def test_repair_fixes_numeric_labels():
+    """Float labels become the canonical names, in index order."""
+    pipe = _FakePipeline({0: 0.0, 1: 1.0, 2: 2.0})
+    utils.repair_label_mapping(pipe)
+    assert pipe.model.config.id2label == {
+        0: "negative",
+        1: "neutral",
+        2: "positive",
+    }
+    assert pipe.model.config.label2id == {
+        "negative": 0,
+        "neutral": 1,
+        "positive": 2,
+    }
+
+
+def test_repair_accepts_string_keys():
+    """A mapping loaded from JSON has string keys; the repair handles both."""
+    pipe = _FakePipeline({"0": 0.0, "1": 1.0, "2": 2.0})
+    utils.repair_label_mapping(pipe)
+    assert pipe.model.config.id2label[2] == "positive"
+
+
+def test_repair_leaves_a_correct_mapping_alone():
+    """MUST STAY SILENT: a model with real labels keeps them.
+
+    This is the arm that matters. A loader that rewrote every mapping would
+    impose THIS checkpoint's label order on any other model the service was
+    pointed at — turning a correct deployment into a silently mislabelled one,
+    with no error anywhere.
+    """
+    original = {0: "bearish", 1: "bullish"}
+    pipe = _FakePipeline(dict(original))
+    utils.repair_label_mapping(pipe)
+    assert pipe.model.config.id2label == original
+    assert pipe.model.config.label2id == {}
+
+
+def test_repair_leaves_an_unknown_index_alone():
+    """An index the mapping does not define is left for the guard to report.
+
+    Guessing a label is worse than failing: run_predictions raises a message
+    naming the cause, which a wrong-but-plausible sentiment never would.
+    """
+    pipe = _FakePipeline({0: 0.0, 1: 1.0, 2: 2.0, 3: 3.0})
+    utils.repair_label_mapping(pipe)
+    assert pipe.model.config.id2label == {0: 0.0, 1: 1.0, 2: 2.0, 3: 3.0}
+
+
+def test_repair_tolerates_an_object_without_a_model():
+    """A stub that is not a pipeline is returned untouched, not crashed on."""
+    sentinel = object()
+    assert utils.repair_label_mapping(sentinel) is sentinel
 
 
 def test_log_entries_are_json_with_required_fields(client: TestClient, caplog):
