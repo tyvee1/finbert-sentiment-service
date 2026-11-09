@@ -86,10 +86,8 @@ Thumbs.db
 .vscode/
 
 # ---- submission hygiene ----------------------------------------------------
-# Graded submissions carry only what the instructions and rubric require, so
-# preparation instruments and working notes stay out of the repo. These are
-# run from a sibling directory, never committed.
-submission-prep/
+# This repository carries only what the instructions and the grading criteria
+# ask for. Working notes and scratch directories stay out of it.
 scratch/
 notes-local/
 
