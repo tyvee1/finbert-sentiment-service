@@ -188,10 +188,23 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test, deepchecks]
     outputs:
-      # Consumed by deploy. An output, not a recomputation: deriving the tag
-      # again in the deploy job would let the two jobs disagree, and the one
-      # that deploys would win silently.
-      image: ${{ steps.build-image.outputs.image }}
+      # The TAG, not the full image URI.
+      #
+      # A job output whose VALUE contains a registered secret is silently
+      # dropped: GitHub logs "Skip output 'image' since it may contain secret"
+      # as a WARNING, the build job succeeds, and the deploy job one step later
+      # fails with "Input required and not supplied: image" — an error about an
+      # action input, three layers from the cause.
+      #
+      # The URI contained one by construction, because ECR_REGISTRY and
+      # AWS_REGION are both repository secrets and the registry host is built
+      # from them. The tag is derived from the commit SHA and a timestamp, so
+      # it carries no secret and crosses the job boundary intact.
+      #
+      # The tag is still produced ONCE, here, which is the property that
+      # mattered: the deploy job composes the URI from this tag and its own
+      # ECR_REGISTRY, rather than deriving a second tag that could disagree.
+      image_tag: ${{ steps.build-image.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -267,7 +280,9 @@ jobs:
           docker push "$IMAGE_URI"
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:latest"
 
-          echo "image=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+          # The tag alone. See the outputs: block above for why the full URI
+          # cannot cross a job boundary here.
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
           echo "Pushed $IMAGE_URI and :latest"
 
   # ---------------------------------------------------------------------------
@@ -365,18 +380,26 @@ jobs:
       # the wrong layer costs more than the check that prevents it.
       - name: Confirm the build job produced an image URI
         env:
-          IMAGE_URI: ${{ needs.build.outputs.image }}
+          IMAGE_TAG: ${{ needs.build.outputs.image_tag }}
+          ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
         run: |
           set -euo pipefail
-          if [ -z "${IMAGE_URI:-}" ]; then
-            echo "::error::the build job's \`image\` output is empty, so there is" \
-                 "nothing to deploy. The deploy job reads needs.build.outputs.image," \
-                 "which the build job sets from steps.build-image.outputs.image." \
-                 "Check that the build job completed, that its push step still has" \
-                 "id: build-image, and that it wrote image= to GITHUB_OUTPUT."
+          if [ -z "${IMAGE_TAG:-}" ]; then
+            echo "::error::the build job's \`image_tag\` output is empty, so there" \
+                 "is nothing to deploy. FIRST SUSPECT: a job output whose value" \
+                 "contains a registered secret is SKIPPED, and the build job logs" \
+                 "\"Skip output ... since it may contain secret\" as a warning while" \
+                 "succeeding. Check the end of the build job's log. Otherwise:" \
+                 "a build job that did not complete, a renamed step id, or a step" \
+                 "that never wrote image_tag= to GITHUB_OUTPUT."
             exit 1
           fi
-          echo "deploying $IMAGE_URI"
+          # Composed here and exported through GITHUB_ENV, because a step's own
+          # env: is scoped to that step — the render step below cannot see it
+          # otherwise, and would receive an empty input for a different reason
+          # than the one this check just ruled out.
+          echo "IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_ENV"
+          echo "deploying $ECR_REPOSITORY:$IMAGE_TAG"
 
       - name: Render the task definition with the new image
         id: render
@@ -384,7 +407,7 @@ jobs:
         with:
           task-definition: task-definition.json
           container-name: ${{ env.CONTAINER_NAME }}
-          image: ${{ needs.build.outputs.image }}
+          image: ${{ env.IMAGE_URI }}
 
       - name: Deploy to Amazon ECS
         uses: aws-actions/amazon-ecs-deploy-task-definition@v2
@@ -400,6 +423,6 @@ jobs:
 
       - name: Report what was deployed
         run: |
-          echo "Deployed ${{ needs.build.outputs.image }}"
+          echo "Deployed ${{ needs.build.outputs.image_tag }}"
           echo "  service: $ECS_SERVICE"
           echo "  cluster: $ECS_CLUSTER"
