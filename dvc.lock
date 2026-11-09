@@ -1,0 +1,22 @@
+schema: '2.0'
+stages:
+  clean:
+    cmd: python scripts/clean_data.py
+    deps:
+    - path: data/raw_stream.csv
+      hash: md5
+      md5: d12555fe2ba28d871907afffe8743c52
+      size: 101760
+    - path: scripts/clean_data.py
+      hash: md5
+      md5: d528c1f5d31152275d6cf8f6e40547a9
+      size: 2818
+    params:
+      params.yaml:
+        clean.max_words: 100
+        clean.min_words: 10
+    outs:
+    - path: data/stream.csv
+      hash: md5
+      md5: b08f1697fe42e889e713f7b47a876848
+      size: 85005
